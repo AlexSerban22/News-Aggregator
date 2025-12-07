@@ -9,6 +9,7 @@ public class Article {
     public String published;
     public String language;
     public List<String> categories;
+    public boolean duped = false;
 
     public Article(){}
 
