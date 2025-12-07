@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,7 +41,10 @@ public class MyThread implements Runnable {
                 if (rootNode.isArray()) {
                     for (JsonNode articleNode : rootNode) {
                         Article article = parseArticle(articleNode);
-                        // adăugăm articolul în structurile de date comune
+                        Tema1.articlesRead[threadId]++;
+                        Tema1.authorArticles.put(article.author,
+                                Tema1.authorArticles.getOrDefault(article.author, 0) + 1);
+
                         if (Tema1.articlesByLanguage.containsKey(article.language))
                             Tema1.articlesByLanguage.get(article.language).add(article.uuid);
                         for (String category : article.categories) {
@@ -53,12 +57,22 @@ public class MyThread implements Runnable {
                             String dupedUuid = Tema1.articlesByTitle.get(article.title).uuid;
                             Tema1.articlesByUuid.get(dupedUuid).duped = true;
 
+                            if (!Tema1.articlesByTitle.get(article.title).duped) {
+                                Tema1.authorArticles.put(article.author,
+                                        Tema1.authorArticles.get(article.author) - 1);
+                            }
+
                             article.duped = true;
                             Tema1.articlesByTitle.put(article.title, article);
                             Tema1.articlesByUuid.put(article.uuid, article);
                         } else if (Tema1.articlesByUuid.containsKey(article.uuid)) {
                             String dupedTitle = Tema1.articlesByUuid.get(article.uuid).title;
                             Tema1.articlesByTitle.get(dupedTitle).duped = true;
+
+                            if (!Tema1.articlesByUuid.get(article.title).duped) {
+                                Tema1.authorArticles.put(article.author,
+                                        Tema1.authorArticles.get(article.author) - 1);
+                            }
 
                             article.duped = true;
                             Tema1.articlesByTitle.put(article.title, article);
@@ -87,16 +101,17 @@ public class MyThread implements Runnable {
                 ArrayList<String> articles = Tema1.articlesByCategory.get(category).stream()
                         .filter(uuid -> !Tema1.articlesByUuid.get(uuid).duped)
                         .sorted()
-                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+                        .collect(Collectors.toCollection(ArrayList::new));
 
                 String fileName = category.replaceAll(" ", "_")
                         .replaceAll(",", "") + ".txt";
                 Path outPath = Path.of(fileName);
                 try (BufferedWriter writer =
-                             Files.newBufferedWriter(outPath, StandardCharsets.UTF_8)) {
+                             Files.newBufferedWriter(outPath)) {
                     for (String uuid : articles) {
                         writer.write(uuid);
                         writer.newLine();
+                        Tema1.categoryCounts.put(category, Tema1.categoryCounts.get(category) + 1);
                     }
                 } catch (Exception e) {
                     System.err.println("Eroare la scrierea fișierului: " + fileName);
@@ -125,6 +140,8 @@ public class MyThread implements Runnable {
                     for (String uuid : articles) {
                         writer.write(uuid);
                         writer.newLine();
+                        Tema1.languageCounts.put(language,
+                                Tema1.languageCounts.get(language) + 1);
                     }
                 } catch (Exception e) {
                     System.err.println("Eroare la scrierea fișierului: " + language + ".txt");

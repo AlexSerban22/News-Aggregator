@@ -1,10 +1,11 @@
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Scanner;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 public class Tema1 {
     public static BlockingQueue<String> articlesQueue;
@@ -19,6 +20,11 @@ public class Tema1 {
     public static CyclicBarrier barrier;
     public static BlockingQueue<String> categoriesQueue;
     public static BlockingQueue<String> languagesQueue;
+    public static int[] articlesRead;
+    public static ConcurrentHashMap<String, Integer> authorArticles = new ConcurrentHashMap<>();
+    public static Map<String, Integer> categoryCounts = new HashMap<>();
+    public static Map<String, Integer> languageCounts = new HashMap<>();
+
 
     public static void main(String[] args) {
         if (args.length != 3) {
@@ -85,9 +91,11 @@ public class Tema1 {
 
         for (String category : categories) {
             articlesByCategory.put(category, new LinkedBlockingQueue<>());
+            categoryCounts.put(category, 0);
         }
         for (String language : languages) {
             articlesByLanguage.put(language, new LinkedBlockingQueue<>());
+            languageCounts.put(language, 0);
         }
 
         // populate categoriesQueue and languagesQueue
@@ -95,6 +103,7 @@ public class Tema1 {
         categoriesQueue.addAll(categories);
         languagesQueue = new ArrayBlockingQueue<>(languages.size());
         languagesQueue.addAll(languages);
+        articlesRead = new int[threadNumber];
 
         barrier = new CyclicBarrier(threadNumber);
         for (int i = 0; i < threadNumber; i++) {
@@ -110,42 +119,134 @@ public class Tema1 {
             }
         }
 
-        ArrayList<String> nonDupTitles = articlesByTitle.entrySet().stream()
-                .filter(e -> !e.getValue().duped)
-                .map(Map.Entry::getKey)
+        ArrayList<Article> uniques = articlesByTitle.values().stream()
+                .filter(article -> !article.duped)
+                .sorted((a, b) -> {
+                    int cmp = b.published.compareTo(a.published);
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return a.uuid.compareTo(b.uuid);
+                })
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
 
-        System.out.println("non-duplicated titles:");
-        for (String title : nonDupTitles) {
-            System.out.println(title);
+        Path outPath = Path.of("all_articles.txt");
+        try (BufferedWriter writer = Files.newBufferedWriter(outPath)) {
+            for (Article a : uniques) {
+                writer.write(a.uuid + " " + a.published + "\n");
+            }
+        } catch (Exception e) {
+            System.err.println("Eroare la scrierea fisierului: all_articles.txt");
+            e.printStackTrace();
         }
 
-//        for (Map.Entry<String, LinkedBlockingQueue<String>> entry : articlesByCategory.entrySet()) {
-//            entry.setValue(entry.getValue().stream()
-//                    .filter(uuid -> !articlesByUuid.get(uuid).duped)
-//                    .collect(java.util.stream.Collectors.toCollection(LinkedBlockingQueue::new)));
-//        }
-//        for (Map.Entry<String, LinkedBlockingQueue<String>> entry : articlesByLanguage.entrySet()) {
-//            entry.setValue(entry.getValue().stream()
-//                    .filter(uuid -> !articlesByUuid.get(uuid).duped)
-//                    .collect(java.util.stream.Collectors.toCollection(LinkedBlockingQueue::new)));
-//        }
-//        System.out.println("Categories:");
-//        for (String category : categories) {
-//            System.out.println(category.replaceAll(" ", "_").replaceAll(",", "")
-//                    + ".txt: ");
-//            for (String uuid : articlesByCategory.get(category)) {
-//                System.out.println(" - " + uuid);
-//            }
-//        }
-//        System.out.println();
-//        System.out.println("Languages:");
-//        for (String language : languages) {
-//            System.out.println(language + ".txt: ");
-//            for (String uuid : articlesByLanguage.get(language)) {
-//                System.out.println(" - " + uuid);
-//            }
-//        }
+        Map<String, Integer> keywordCount = uniques.stream()
+                .filter(a -> a.language.equals("english"))
+                .map(a -> a.text.toLowerCase().replaceAll("[^a-z ]", "").split(" "))
+                .map(words -> Arrays.stream(words).collect(Collectors.toSet()))
+                .map(wordSet -> wordSet.stream()
+                        .filter(w -> !linkingWords.contains(w))
+                        .collect(Collectors.toSet()))
+                .flatMap(Set::stream)
+                .collect(Collectors.toMap(w -> w, w -> 1, Integer::sum))
+                .entrySet().stream()
+                .sorted((e1, e2) -> {
+                    int cmp = e2.getValue().compareTo(e1.getValue());
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return e1.getKey().compareTo(e2.getKey());
+                })
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (e1, e2) -> e1,
+                        LinkedHashMap::new
+                ));
+
+
+        Path outPathKeywords = Path.of("keywords_count.txt");
+        try (BufferedWriter writer = Files.newBufferedWriter(outPathKeywords)) {
+            for (Map.Entry<String, Integer> entry : keywordCount.entrySet()) {
+                writer.write(entry.getKey() + " " + entry.getValue() + "\n");
+            }
+        } catch (Exception e) {
+            System.err.println("Eroare la scrierea fișierului: keywords_count.txt");
+            e.printStackTrace();
+        }
+
+        int totalArticles = Arrays.stream(articlesRead).sum();
+        int duplicatesCount = totalArticles - uniques.size();
+        int uniquesCount = uniques.size();
+        String bestAuthor = authorArticles.entrySet().stream()
+                .max((e1, e2) -> {
+                    int cmp = e1.getValue().compareTo(e2.getValue());
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return e2.getKey().compareTo(e1.getKey());
+                })
+                .map(Map.Entry::getKey)
+                .orElse("");
+        int bestAuthorArticles = authorArticles.getOrDefault(bestAuthor, 0);
+        String bestCategory = categoryCounts.entrySet().stream()
+                .max((e1, e2) -> {
+                    int cmp = e1.getValue().compareTo(e2.getValue());
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return e2.getKey().compareTo(e1.getKey());
+                })
+                .map(Map.Entry::getKey)
+                .orElse("");
+        int bestCategoryArticles = categoryCounts.getOrDefault(bestCategory, 0);
+        bestCategory = bestCategory.replaceAll(",", "").replaceAll(" ", "_");
+        String bestLanguage = languageCounts.entrySet().stream()
+                .max((e1, e2) -> {
+                    int cmp = e1.getValue().compareTo(e2.getValue());
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return e2.getKey().compareTo(e1.getKey());
+                })
+                .map(Map.Entry::getKey)
+                .orElse("");
+        int bestLanguageArticles = languageCounts.getOrDefault(bestLanguage, 0);
+        Article mostRecentArticle = uniques.stream()
+                .max((a, b) -> {
+                    int cmp = a.published.compareTo(b.published);
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return b.uuid.compareTo(a.uuid);
+                })
+                .orElse(null);
+
+        Map.Entry<String, Integer> bestKeyword = keywordCount.keySet().stream()
+                .map(k -> Map.entry(k, keywordCount.get(k)))
+                .max((e1, e2) -> {
+                    int cmp = e1.getValue().compareTo(e2.getValue());
+                    if (cmp != 0) {
+                        return cmp;
+                    }
+                    return e2.getKey().compareTo(e1.getKey());
+                })
+                .orElse(Map.entry("", 0));
+
+        Path outPathStats = Path.of("reports.txt");
+        try (BufferedWriter writer = Files.newBufferedWriter(outPathStats)) {
+            writer.write("duplicates_found - " + duplicatesCount + "\n");
+            writer.write("unique_articles - " + uniquesCount + "\n");
+            writer.write("best_author - " + bestAuthor + " " + bestAuthorArticles + "\n");
+            writer.write("top_language - " + bestLanguage + " " + bestLanguageArticles + "\n");
+            writer.write("top_category - " + bestCategory + " " + bestCategoryArticles + "\n");
+            writer.write("most_recent_article - " + mostRecentArticle.published + " " + mostRecentArticle.url + "\n");
+            writer.write("top_keyword_en - " + bestKeyword.getKey() + " " + bestKeyword.getValue() + "\n");
+        } catch (Exception e) {
+            System.err.println("Eroare la scrierea fișierului: reports.txt");
+            e.printStackTrace();
+        }
+
     }
 
     public static void readInputFile(String inputFile, HashSet<String> items) {
