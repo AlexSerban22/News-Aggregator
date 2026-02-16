@@ -1,3 +1,0 @@
-2
-./testdir/articles_small_0.json
-./testdir/articles_small_1.json

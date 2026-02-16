@@ -1,4 +1,0 @@
-3
-./testdir/languages.txt
-./testdir/categories.txt
-./testdir/english_linking_words.txt
