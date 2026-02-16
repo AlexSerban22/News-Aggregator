@@ -8,7 +8,7 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 public class Tema1 {
-    public static BlockingQueue<String> articlesQueue;
+    public static BlockingQueue<String> articleFilesQueue;
     public static ConcurrentHashMap<String, Article> articlesByTitle = new ConcurrentHashMap<>();
     public static ConcurrentHashMap<String, Article> articlesByUuid = new ConcurrentHashMap<>();
     public static ConcurrentHashMap<String, LinkedBlockingQueue<String>> articlesByCategory = new ConcurrentHashMap<>();
@@ -21,7 +21,9 @@ public class Tema1 {
     public static BlockingQueue<String> categoriesQueue;
     public static BlockingQueue<String> languagesQueue;
     public static int[] articlesRead;
-    public static ConcurrentHashMap<String, Integer> authorArticles = new ConcurrentHashMap<>();
+    public static BlockingQueue<Article> articlesQueue;
+    public static Map<String, Integer> keywordCounts = new ConcurrentHashMap<>();
+    public static Map<String, Integer> authorArticles = new ConcurrentHashMap<>();
     public static Map<String, Integer> categoryCounts = new HashMap<>();
     public static Map<String, Integer> languageCounts = new HashMap<>();
 
@@ -37,30 +39,26 @@ public class Tema1 {
         sets.add(linkingWords);
 
         int threadNumber = Integer.parseInt(args[0]);
-        String articlesFile = args[1];
-        String inputsFile = args[2];
-
         Thread[] threads = new Thread[threadNumber];
 
-        // Read articles file and populate the articlesQueue
-        try {
-            Scanner scanner = new Scanner(new File(articlesFile));
+        String articlesFile = args[1];
 
+        File articlesF = new File(articlesFile);
+        Path articlesBaseDir = articlesF.getParentFile().toPath();
+
+        try (Scanner scanner = new Scanner(articlesF)) {
             if (scanner.hasNextInt()) {
                 int numberOfFiles = scanner.nextInt();
                 scanner.nextLine();
 
-                articlesQueue = new ArrayBlockingQueue<>(numberOfFiles);
+                articleFilesQueue = new ArrayBlockingQueue<>(numberOfFiles);
 
-                for (int i = 0; i < numberOfFiles; i++) {
-                    if (scanner.hasNextLine()) {
-                        String filePath = scanner.nextLine().trim();
-                        articlesQueue.add(filePath);
-                    }
+                for (int i = 0; i < numberOfFiles && scanner.hasNextLine(); i++) {
+                    String relativePath = scanner.nextLine().trim();
+                    Path resolved = articlesBaseDir.resolve(relativePath).normalize();
+                    articleFilesQueue.add(resolved.toString());
                 }
             }
-            scanner.close();
-
         } catch (FileNotFoundException e) {
             System.err.println("Fisierul de intrare nu a fost gasit: " + articlesFile);
             e.printStackTrace();
@@ -68,19 +66,20 @@ public class Tema1 {
         }
 
         // Read inputs file and get categories, languages and keywords
-        try {
-            Scanner scanner = new Scanner(new File(inputsFile));
+        String inputsFile = args[2];
 
-            // Read linking words
+        File inputsF = new File(inputsFile);
+        Path inputsBaseDir = inputsF.getParentFile().toPath();
+
+        try (Scanner scanner = new Scanner(inputsF)) {
             if (scanner.hasNextInt()) {
                 int numberOfFiles = scanner.nextInt();
                 scanner.nextLine();
 
-                for (int i = 0; i < numberOfFiles; i++) {
-                    if (scanner.hasNextLine()) {
-                        String filePath = scanner.nextLine().trim();
-                        readInputFile(filePath, sets.get(i));
-                    }
+                for (int i = 0; i < numberOfFiles && scanner.hasNextLine(); i++) {
+                    String relativePath = scanner.nextLine().trim();
+                    Path resolved = inputsBaseDir.resolve(relativePath).normalize();
+                    readInputFile(resolved.toString(), sets.get(i));
                 }
             }
         } catch (FileNotFoundException e) {
@@ -91,11 +90,9 @@ public class Tema1 {
 
         for (String category : categories) {
             articlesByCategory.put(category, new LinkedBlockingQueue<>());
-            categoryCounts.put(category, 0);
         }
         for (String language : languages) {
             articlesByLanguage.put(language, new LinkedBlockingQueue<>());
-            languageCounts.put(language, 0);
         }
 
         // populate categoriesQueue and languagesQueue
@@ -104,6 +101,7 @@ public class Tema1 {
         languagesQueue = new ArrayBlockingQueue<>(languages.size());
         languagesQueue.addAll(languages);
         articlesRead = new int[threadNumber];
+        articlesQueue = new LinkedBlockingQueue<>();
 
         barrier = new CyclicBarrier(threadNumber);
         for (int i = 0; i < threadNumber; i++) {
@@ -128,9 +126,9 @@ public class Tema1 {
                     }
                     return a.uuid.compareTo(b.uuid);
                 })
-                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+                .collect(Collectors.toCollection(ArrayList::new));
 
-        Path outPath = Path.of("all_articles.txt");
+        Path outPath = Path.of("./all_articles.txt");
         try (BufferedWriter writer = Files.newBufferedWriter(outPath)) {
             for (Article a : uniques) {
                 writer.write(a.uuid + " " + a.published + "\n");
@@ -140,16 +138,7 @@ public class Tema1 {
             e.printStackTrace();
         }
 
-        Map<String, Integer> keywordCount = uniques.stream()
-                .filter(a -> a.language.equals("english"))
-                .map(a -> a.text.toLowerCase().replaceAll("[^a-z ]", "").split(" "))
-                .map(words -> Arrays.stream(words).collect(Collectors.toSet()))
-                .map(wordSet -> wordSet.stream()
-                        .filter(w -> !linkingWords.contains(w))
-                        .collect(Collectors.toSet()))
-                .flatMap(Set::stream)
-                .collect(Collectors.toMap(w -> w, w -> 1, Integer::sum))
-                .entrySet().stream()
+        HashMap <String, Integer> sortedKeywordCounts = keywordCounts.entrySet().stream()
                 .sorted((e1, e2) -> {
                     int cmp = e2.getValue().compareTo(e1.getValue());
                     if (cmp != 0) {
@@ -164,21 +153,26 @@ public class Tema1 {
                         LinkedHashMap::new
                 ));
 
-
-        Path outPathKeywords = Path.of("keywords_count.txt");
+        Path outPathKeywords = Path.of("./keywords_count.txt");
         try (BufferedWriter writer = Files.newBufferedWriter(outPathKeywords)) {
-            for (Map.Entry<String, Integer> entry : keywordCount.entrySet()) {
-                writer.write(entry.getKey() + " " + entry.getValue() + "\n");
+            for (Map.Entry<String, Integer> entry : sortedKeywordCounts.entrySet()) {
+                writer.write(entry.getKey() + " " + entry.getValue());
+                writer.newLine();
             }
         } catch (Exception e) {
             System.err.println("Eroare la scrierea fișierului: keywords_count.txt");
             e.printStackTrace();
         }
 
+        // Calculate statistics
         int totalArticles = Arrays.stream(articlesRead).sum();
+        // 1. Number of duplicate articles
         int duplicatesCount = totalArticles - uniques.size();
+        // 2. Number of unique articles
         int uniquesCount = uniques.size();
-        String bestAuthor = authorArticles.entrySet().stream()
+
+        // 3. Author with most articles
+        Map.Entry<String, Integer> bestAuthor = authorArticles.entrySet().stream()
                 .max((e1, e2) -> {
                     int cmp = e1.getValue().compareTo(e2.getValue());
                     if (cmp != 0) {
@@ -186,10 +180,28 @@ public class Tema1 {
                     }
                     return e2.getKey().compareTo(e1.getKey());
                 })
-                .map(Map.Entry::getKey)
-                .orElse("");
-        int bestAuthorArticles = authorArticles.getOrDefault(bestAuthor, 0);
-        String bestCategory = categoryCounts.entrySet().stream()
+                .orElse(Map.entry("", 0));
+
+        // 4. Category with most articles
+        for (String category : categories) {
+            var uuids = articlesByCategory.get(category);
+            if (uuids == null) {
+                categoryCounts.put(category, 0);
+                continue;
+            }
+
+            int cnt = (int) uuids.stream()
+                    .filter(uuid -> {
+                        Article a = articlesByUuid.get(uuid);
+                        return a != null && !a.duped;
+                    })
+                    .distinct()
+                    .count();
+
+            categoryCounts.put(category, cnt);
+        }
+
+        Map.Entry<String, Integer> bestCategory = categoryCounts.entrySet().stream()
                 .max((e1, e2) -> {
                     int cmp = e1.getValue().compareTo(e2.getValue());
                     if (cmp != 0) {
@@ -197,11 +209,20 @@ public class Tema1 {
                     }
                     return e2.getKey().compareTo(e1.getKey());
                 })
-                .map(Map.Entry::getKey)
-                .orElse("");
-        int bestCategoryArticles = categoryCounts.getOrDefault(bestCategory, 0);
-        bestCategory = bestCategory.replaceAll(",", "").replaceAll(" ", "_");
-        String bestLanguage = languageCounts.entrySet().stream()
+                .orElse(Map.entry("", 0));
+        String bestCategoryName = bestCategory.getKey()
+                .replaceAll(",", "").replaceAll(" ", "_");
+
+        // 5. Language with most articles
+        for (String language : languages) {
+            int count = articlesByLanguage.get(language).stream()
+                    .filter(uuid -> !articlesByUuid.get(uuid).duped)
+                    .distinct()
+                    .toArray().length;
+            languageCounts.put(language, count);
+        }
+
+        Map.Entry<String, Integer> bestLanguage = languageCounts.entrySet().stream()
                 .max((e1, e2) -> {
                     int cmp = e1.getValue().compareTo(e2.getValue());
                     if (cmp != 0) {
@@ -209,9 +230,9 @@ public class Tema1 {
                     }
                     return e2.getKey().compareTo(e1.getKey());
                 })
-                .map(Map.Entry::getKey)
-                .orElse("");
-        int bestLanguageArticles = languageCounts.getOrDefault(bestLanguage, 0);
+                .orElse(Map.entry("", 0));
+
+        // 6. Most recent article
         Article mostRecentArticle = uniques.stream()
                 .max((a, b) -> {
                     int cmp = a.published.compareTo(b.published);
@@ -222,24 +243,18 @@ public class Tema1 {
                 })
                 .orElse(null);
 
-        Map.Entry<String, Integer> bestKeyword = keywordCount.keySet().stream()
-                .map(k -> Map.entry(k, keywordCount.get(k)))
-                .max((e1, e2) -> {
-                    int cmp = e1.getValue().compareTo(e2.getValue());
-                    if (cmp != 0) {
-                        return cmp;
-                    }
-                    return e2.getKey().compareTo(e1.getKey());
-                })
+        // 7. Most common keyword
+        Map.Entry<String, Integer> bestKeyword = sortedKeywordCounts.entrySet().stream()
+                .findFirst()
                 .orElse(Map.entry("", 0));
 
-        Path outPathStats = Path.of("reports.txt");
+        Path outPathStats = Path.of("./reports.txt");
         try (BufferedWriter writer = Files.newBufferedWriter(outPathStats)) {
             writer.write("duplicates_found - " + duplicatesCount + "\n");
             writer.write("unique_articles - " + uniquesCount + "\n");
-            writer.write("best_author - " + bestAuthor + " " + bestAuthorArticles + "\n");
-            writer.write("top_language - " + bestLanguage + " " + bestLanguageArticles + "\n");
-            writer.write("top_category - " + bestCategory + " " + bestCategoryArticles + "\n");
+            writer.write("best_author - " + bestAuthor.getKey() + " " + bestAuthor.getValue() + "\n");
+            writer.write("top_language - " + bestLanguage.getKey() + " " + bestLanguage.getValue() + "\n");
+            writer.write("top_category - " + bestCategoryName + " " + bestCategory.getValue() + "\n");
             writer.write("most_recent_article - " + mostRecentArticle.published + " " + mostRecentArticle.url + "\n");
             writer.write("top_keyword_en - " + bestKeyword.getKey() + " " + bestKeyword.getValue() + "\n");
         } catch (Exception e) {
